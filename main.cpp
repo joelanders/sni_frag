@@ -83,26 +83,28 @@ int main(int argc, char* argv[]) {
     struct timeval tv;
 	int sel_ret;
 	int n;
-	fd_set fds;
-	FD_ZERO(&fds);
-	FD_SET(sockfd, &fds);
+	fd_set rfds, wfds;
 	while(1) {
+        FD_ZERO(&rfds);
+        FD_ZERO(&wfds);
+        FD_SET(sockfd, &rfds);
+        FD_SET(sockfd, &wfds);
+
 		tv.tv_sec = 1;
 		tv.tv_usec = 0;
-		////////////////////////////////////
-		// first check if socket is writable
-		// (draining nwrite)
-		////////////////////////////////////
-		sel_ret = select(sockfd+1, NULL, &fds, NULL, &tv); // wait for writeable
+
+		sel_ret = select(sockfd+1, &rfds, &wfds, NULL, &tv);
 		if (sel_ret < 0) {
 			printf("select() failed");
-			exit(1);
+			break;
 		}
 		if (sel_ret == 0) {
-			printf("select() timed out waiting for writable.\n");
-		} else {
-			// only put one fd in, so we know it's writeable
-			printf("nwrite.size(): %d\n", nwrite.size());
+			printf("select() timed out.\n");
+			break;
+		}
+        if (FD_ISSET(sockfd, &wfds)) {
+            // only put one fd in, so we know it's writeable
+            printf("nwrite.size(): %d\n", nwrite.size());
 
             //XXX clean this up
             std::size_t found = nwrite.find(hostname);
@@ -116,51 +118,34 @@ int main(int argc, char* argv[]) {
                 sleep(0.5);
             }
 
-			n = write(sockfd, nwrite.c_str(), nwrite.length());
-			std::cout << "written to sockfd: " << n << std::endl;
-			if (n > 0) {
-				nwrite.erase(0, n);
-			}
-			printf("nwrite.size(): %d\n", nwrite.size());
-		}
+            n = write(sockfd, nwrite.c_str(), nwrite.length());
+            std::cout << "written to sockfd: " << n << std::endl;
+            if (n > 0) {
+                nwrite.erase(0, n);
+            }
+            printf("nwrite.size(): %d\n", nwrite.size());
+        }
+        if (FD_ISSET(sockfd, &rfds)) {
+            printf("nread.size(): %d\n", nread.size());
+            while(1) {
+                n = read(sockfd, &readbuf, sizeof(readbuf));
+                std::cout << "read from sockfd: " << n << std::endl;
+                if (read > 0) {
+                    size_t cur_size = nread.length();
+                    nread.resize(cur_size + n);
+                    std::copy(readbuf, readbuf + n, nread.begin() + cur_size);
+                }
+                if (static_cast<size_t>(n) != sizeof(readbuf) || n == 0) {
+                    break;
+                }
+                if(n < 0) {
+                    printf("Read error \n");
+                    break;
+                }
+            }
+            printf("nread.size(): %d\n", nread.size());
+        }
 
-		//////////////////////////////////
-		// now check if socket is readable
-		// (filling nread)
-		//////////////////////////////////
-		tv.tv_sec = 1;
-		tv.tv_usec = 0;
-		sel_ret = select(sockfd+1, &fds, NULL, NULL, &tv); // wait for readable
-		if (sel_ret < 0) {
-			printf("select() failed");
-			exit(1);
-		}
-		if (sel_ret == 0) {
-			printf("select() timed out waiting for readable.\n");
-		} else {
-			printf("nread.size(): %d\n", nread.size());
-			while(1) {
-				n = read(sockfd, &readbuf, sizeof(readbuf));
-				std::cout << "read from sockfd: " << n << std::endl;
-				if (read > 0) {
-					size_t cur_size = nread.length();
-					nread.resize(cur_size + n);
-					std::copy(readbuf, readbuf + n, nread.begin() + cur_size);
-				}
-				if (static_cast<size_t>(n) != sizeof(readbuf) || n == 0) {
-					break;
-				}
-				if(n < 0) {
-					printf("Read error \n");
-					break;
-				}
-			}
-			printf("nread.size(): %d\n", nread.size());
-		} 
-		////////////////////////////// 
-		////////////////////////////// 
-		////////////////////////////// 
-		// XXX aread just grows for now, I never drain it
 		ssl_filter.update();
         std::cout << "AREAD" << std::endl;
         std::cout << aread << std::endl;
