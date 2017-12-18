@@ -17,6 +17,14 @@
 #include <unistd.h>
 #include <errno.h>
 #include <arpa/inet.h> 
+#include <sys/time.h>
+
+void print_timer(struct timeval tval_start) {
+    struct timeval tval_current, tval_diff;
+    gettimeofday(&tval_current, NULL);
+    timersub(&tval_start, &tval_current, &tval_diff);
+    printf("Time elapsed: %ld.%06ld\n", (long int)tval_diff.tv_sec, (long int)tval_diff.tv_usec);
+}
 
 int main(int argc, char* argv[]) {
 	if (argc != 3) {
@@ -29,11 +37,6 @@ int main(int argc, char* argv[]) {
     std::string hostname { argv[1] };
     std::cout << "hostname: " << hostname << std::endl;
     std::cout << "hostname.length(): " << hostname.length() << std::endl;
-    std::string hn2 { "fucking example.com shit" };
-    std::size_t found = hn2.find(hostname);
-    if (found!=std::string::npos) {
-        std::cout << "fucking found" << std::endl;
-    }
 
     std::string nread, nwrite, aread, awrite;
 	SSL_CTX* ctx = SSL_CTX_new(SSLv23_method()); //XXX don't ignore errors
@@ -83,16 +86,30 @@ int main(int argc, char* argv[]) {
     struct timeval tv;
 	int sel_ret;
 	int n;
+	bool stop_reading = false;
+	bool stop_writing = false;
 	fd_set rfds, wfds;
+
+    struct timeval tval_start;
+    gettimeofday(&tval_start, NULL);
+
 	while(1) {
+        printf("TOP OF WHILE LOOP\n");
+        print_timer(tval_start);
         FD_ZERO(&rfds);
         FD_ZERO(&wfds);
-        FD_SET(sockfd, &rfds);
-        FD_SET(sockfd, &wfds);
+        if (!stop_reading) {
+            FD_SET(sockfd, &rfds);
+        }
+        if (!nwrite.empty() && !stop_writing) {
+            FD_SET(sockfd, &wfds);
+        }
 
 		tv.tv_sec = 1;
 		tv.tv_usec = 0;
 
+		printf("BLOCKING ON SELECT\n");
+        print_timer(tval_start);
 		sel_ret = select(sockfd+1, &rfds, &wfds, NULL, &tv);
 		if (sel_ret < 0) {
 			printf("select() failed");
@@ -103,7 +120,9 @@ int main(int argc, char* argv[]) {
 			break;
 		}
         if (FD_ISSET(sockfd, &wfds)) {
+            printf("WRITABLE\n");
             // only put one fd in, so we know it's writeable
+            printf("awrite.size(): %d\n", awrite.size());
             printf("nwrite.size(): %d\n", nwrite.size());
 
             //XXX clean this up
@@ -126,6 +145,7 @@ int main(int argc, char* argv[]) {
             printf("nwrite.size(): %d\n", nwrite.size());
         }
         if (FD_ISSET(sockfd, &rfds)) {
+            printf("READABLE\n");
             printf("nread.size(): %d\n", nread.size());
             while(1) {
                 n = read(sockfd, &readbuf, sizeof(readbuf));
@@ -135,7 +155,11 @@ int main(int argc, char* argv[]) {
                     nread.resize(cur_size + n);
                     std::copy(readbuf, readbuf + n, nread.begin() + cur_size);
                 }
-                if (static_cast<size_t>(n) != sizeof(readbuf) || n == 0) {
+                if (static_cast<size_t>(n) != sizeof(readbuf)) {
+                    break;
+                }
+                if (n == 0) {
+                    stop_reading = true;
                     break;
                 }
                 if(n < 0) {
@@ -147,11 +171,16 @@ int main(int argc, char* argv[]) {
         }
 
 		ssl_filter.update();
-        std::cout << "AREAD" << std::endl;
-        std::cout << aread << std::endl;
-		sleep(1.0);
+		if (awrite.size() == 0 && nwrite.size() == 0) {
+		    stop_writing = true;
+        }
+        if (stop_reading && stop_writing) {
+            break;
+        }
 
 	}
+    std::cout << "AREAD" << std::endl;
+    std::cout << aread << std::endl;
 
     return 0;
 
